@@ -3,6 +3,7 @@ package br.com.pinedu.importa.run
 import br.com.pinedu.importa.Bairro
 import br.com.pinedu.importa.Cidade
 import br.com.pinedu.importa.Estado
+import br.com.pinedu.importa.Pais
 import br.com.pinedu.importa.TipoLogradouro
 import br.com.pinedu.importa.Logradouro
 
@@ -12,7 +13,16 @@ class Run {
 	static main(args) {
 		Sql db = Sql.newInstance('jdbc:postgresql://127.0.0.1:5432/pnd', 'pnd', 'x8DwsDRMUvxqrq#L', 'org.postgresql.Driver')
 		String path = "/pinedu/modelo/DNE_MD/eDNE_Basico_25062/Fixo/"
-		
+
+		//Pais
+		println 'Pais'
+		Pais pais = new Pais(db: db)
+		if (PRODUCTION == Boolean.FALSE) {
+			pais.criaTabela()
+		}
+		pais.leArquivo(path)
+		pais.execute()
+		pais.finaliza()
 		//Estado
 		println 'Estado'
 		Estado estado = new Estado(db: db)
