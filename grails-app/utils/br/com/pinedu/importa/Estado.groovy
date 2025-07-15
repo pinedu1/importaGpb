@@ -1,0 +1,131 @@
+package br.com.pinedu.importa
+
+import br.com.pinedu.importa.pattern.Command
+import groovy.sql.GroovyRowResult
+import groovy.sql.Sql
+
+class Estado implements Command {
+	private static Boolean DEBUG = true
+	File arquivoEstado
+	Map mapaEstado = [:]
+	Sql db
+	Long id = 0
+	String cep1i = ''
+	String cep1f = ''
+	String cep2i = ''
+	String cep2f = ''
+
+	@Override
+	public void execute() {
+
+		Map<String, Integer> schema = [
+			primeiroCaracter: 1
+			, pais: 2
+			, uf: 2
+			, separador_01: 2
+			, chaveDne: 2
+			, nome: 72
+			, qtdeFx: 2
+			, separador_02: 1
+			, ordem: 2
+			, separador_03: 1
+			, cep1i: 8
+			, separador_04: 1
+			, cep1f: 8
+			, separador_05: 2
+		]
+		StringBuilder sb = new StringBuilder()
+		arquivoEstado.eachLine("ISO-8859-1") { String linha ->
+			String primeiroCaracter = linha.substring(0, 1)
+			if ( "#".equals( primeiroCaracter ) || "C".equals( primeiroCaracter ) ) return
+			Map<String, Object> result = FixedWidthParser.parse( linha, schema )
+			String abrvACT = ""
+			String sigla = result.uf
+			String nome = result.nome
+			Long chaveDne = ZValue.toLong( result.chaveDne )
+			Integer ordemRegistro = ZValue.toInt( result.ordem )
+			Integer totalRegistro = ZValue.toInt( result.qtdeFx )
+
+			cep1i = null
+			cep1f = null
+			cep2i = null
+			cep2f = null
+			if (ordemRegistro == 1) {
+				cep1i = result.cep1i
+				cep1f = result.cep1f
+			} else if (ordemRegistro == 2) {
+				cep2i = result.cep1i
+				cep2f = result.cep1f
+			}
+
+			GroovyRowResult estado = db.firstRow("SELECT id as id, version as version FROM estado WHERE chavedne = :chavedne", [chavedne: chaveDne])
+			if (estado == null) {
+				if ( ordemRegistro == 1 ) {
+					id = db.executeInsert("INSERT INTO estado( id, version, abrvact, cep1i, cep1f, cep2i, cep2f, chavedne, nome, sistema, uf, ativo) VALUES (nextval('seq_estado'), :version, :abrvact, :cep1i, :cep1f, :cep2i, :cep2f, :chavedne, :nome, :sistema, :uf, :ativo);"
+						, [version: 0, abrvact: abrvACT, cep1i: cep1i, cep1f: cep1f, cep2i: cep2i, cep2f: cep2f, chavedne: chaveDne, nome: nome, sistema: true, uf: sigla, ativo: true])[0][0]
+				} else {
+					db.executeUpdate("UPDATE estado SET version=:version, cep2f=:cep2f, cep2i=:cep2i WHERE chavedne = :chavedne;"
+						, [cep2i: cep2i, cep2f: cep2f, chavedne: chaveDne, version: 1])
+				}
+				mapaEstado[sigla] = id
+			} else {
+				if (ordemRegistro == 1) {
+					db.executeUpdate("UPDATE estado SET id=:id, version=:version, abrvact=:abrvact, cep1f=:cep1f, cep1i=:cep1i, cep2f=:cep2f, cep2i=:cep2i, chavedne=:chavedne, nome=:nome, sistema=:sistema, uf=uf WHERE id = :id, ativo = :ativo;"
+						, [id: estado.id, version: 1, abrvact: abrvACT, cep1i: cep1i, cep1f: cep1f, cep2i: cep2i, cep2f: cep2f, chavedne: chaveDne, nome: nome, sistema: true, uf: sigla, ativo: true])
+				} else {
+					db.executeUpdate("UPDATE estado SET version=:version, cep2f=:cep2f, cep2i=:cep2i WHERE chavedne = :chavedne;"
+						, [cep2i: cep2i, cep2f: cep2f, chavedne: chaveDne, version: estado.version+1])
+				}
+				mapaEstado[sigla] = estado.id
+			}
+		}
+	}
+	@Override
+	public void leArquivo(String path) throws Exception {
+		arquivoEstado = new File("${path}/DNE_GU_FAIXAS_CEP_UF.TXT")
+	}
+	@Override
+	public void criaTabela() {
+		db.execute("DROP SEQUENCE IF EXISTS seq_estado;")
+		db.execute("""
+DROP INDEX IF EXISTS idxUfAtivo;
+DROP INDEX IF EXISTS idxUfCep;
+DROP INDEX IF EXISTS idxUfNome;
+		""")
+		db.execute("DROP TABLE IF EXISTS estado CASCADE;")
+		db.execute("""
+CREATE TABLE IF NOT EXISTS estado (
+    id bigint NOT NULL,
+    version bigint NOT NULL,
+    cep2i character varying(8) COLLATE pg_catalog."default",
+    sistema boolean,
+    abrvact character varying(20) COLLATE pg_catalog."default",
+    cep1f character varying(8) COLLATE pg_catalog."default",
+    chavecep integer,
+    cep2f character varying(8) COLLATE pg_catalog."default",
+    nome character varying(30) COLLATE pg_catalog."default" NOT NULL,
+    cep1i character varying(8) COLLATE pg_catalog."default",
+    uf character varying(2) COLLATE pg_catalog."default" NOT NULL,
+    chavedne integer,
+    ativo boolean,
+    CONSTRAINT "estadoPK" PRIMARY KEY (id),
+    CONSTRAINT uc_estadocep1f_col UNIQUE (cep1f),
+    CONSTRAINT uc_estadocep1i_col UNIQUE (cep1i),
+    CONSTRAINT uc_estadocep2f_col UNIQUE (cep2f),
+    CONSTRAINT uc_estadocep2i_col UNIQUE (cep2i),
+    CONSTRAINT uc_estadochavedne_col UNIQUE (chavedne),
+    CONSTRAINT uc_estadonome_col UNIQUE (nome),
+    CONSTRAINT uc_estadouf_col UNIQUE (uf)
+);""")
+		db.execute("""
+CREATE INDEX IF NOT EXISTS "idxUfAtivo" ON estado USING btree (ativo);
+CREATE UNIQUE INDEX IF NOT EXISTS "idxUfCep" ON public.estado USING btree (cep1i);
+CREATE UNIQUE INDEX IF NOT EXISTS "idxUfNome" ON public.estado USING btree (nome);
+CREATE UNIQUE INDEX uf_uniq ON estado (uf);
+CREATE SEQUENCE seq_estado;
+""")
+	}
+	@Override
+	public void finaliza() {
+	}
+}

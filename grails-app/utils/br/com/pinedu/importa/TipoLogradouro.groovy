@@ -1,0 +1,88 @@
+package br.com.pinedu.importa
+
+import groovy.sql.GroovyRowResult
+
+import java.io.File;
+
+import br.com.pinedu.importa.pattern.Command
+
+class TipoLogradouro implements Command {
+	File arquivoTipoLogradouro
+	def db
+	Map mapaTipoLogradouro = [:]
+	Long id = 0
+	Long version = 0
+	Boolean sistema = true
+	Boolean ativo = true
+	@Override
+	public void criaTabela() {
+		db.execute("DROP SEQUENCE IF EXISTS seq_tipo_logradouro;")
+		db.execute("""
+DROP INDEX IF EXISTS "idxTipLogAtivo";
+DROP INDEX IF EXISTS "idxTipLogNome";
+DROP INDEX IF EXISTS "idxTipLogSigla";
+		""")
+		db.execute("DROP TABLE IF EXISTS tipo_logradouro CASCADE;")
+		db.execute("""
+CREATE TABLE IF NOT EXISTS tipo_logradouro (
+    id bigint NOT NULL,
+    version bigint NOT NULL,
+    sigla character varying(40) NOT NULL,
+    sistema boolean NOT NULL,
+    nome character varying(72) NOT NULL,
+    ativo boolean,
+    chavedne bigint,
+    CONSTRAINT "tipo_logradouroPK" PRIMARY KEY (id),
+    CONSTRAINT uc_tipo_logradourochavedne_col UNIQUE (chavedne)
+);
+		""")
+		db.execute("CREATE SEQUENCE seq_tipo_logradouro;")
+		db.execute("""
+CREATE INDEX IF NOT EXISTS "idxTipLogAtivo" ON tipo_logradouro USING btree (ativo);
+CREATE INDEX IF NOT EXISTS "idxTipLogNome" ON tipo_logradouro USING btree (nome);
+CREATE INDEX IF NOT EXISTS "idxTipLogSigla" ON tipo_logradouro USING btree (sigla);
+		""")
+	}
+
+	@Override
+	public void execute() {
+		Map<String, Integer> schema = [
+			primeiroCaracter: 1
+			, separador_01: 3
+			, chaveDne: 3
+			, nome: 72
+			, sigla: 15
+			, separador_02: 1
+		]
+		arquivoTipoLogradouro.eachLine("ISO-8859-1") { String linha ->
+			String primeiroCaracter = linha.substring(0, 1) 
+			if ( "#" == primeiroCaracter || "C" == primeiroCaracter) return
+			Map<String, Object> result = FixedWidthParser.parse( linha, schema )
+			String abrvACT = ""
+			String sigla = result.sigla
+			String nome = result.nome
+			if ( ''.equals( sigla ) ) {
+				sigla = nome.take(15 )
+			}
+			Integer chaveDne = ZValue.toInt( result.chaveDne )
+			GroovyRowResult tipoLog = db.firstRow("SELECT id as id, version as version FROM tipo_logradouro WHERE chavedne = :chavedne", [chavedne: chaveDne])
+			if (tipoLog == null) {
+				id = db.executeInsert("INSERT INTO tipo_logradouro(id, version, ativo, chavedne, nome, sigla, sistema) VALUES (nextval('seq_tipo_logradouro'), :version, :ativo, :chavedne, :nome, :sigla, :sistema);"
+					, [version: version, ativo: ativo, chavedne: chaveDne, nome: nome, sigla: sigla, sistema: sistema])[0][0]
+				mapaTipoLogradouro[nome] = id
+			} else {
+				db.executeUpdate("UPDATE tipo_logradouro SET version=:version, chavedne=:chavedne, nome=:nome, sigla=:sigla WHERE id = :id;"
+					, [id: tipoLog.id, version: tipoLog.version + 1, chavedne: chaveDne, nome: nome, sigla: sigla])
+				mapaTipoLogradouro[nome] = tipoLog.id
+			}
+		}
+	}
+
+	@Override
+	public void leArquivo(String path) throws Exception {
+		arquivoTipoLogradouro = new File("${path}/DNE_GU_TIPOS_LOGRADOURO.TXT")
+	}
+	@Override
+	public void finaliza() {
+	}
+}
